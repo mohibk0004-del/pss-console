@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework><UseWPF>true</UseWPF><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><AssemblyName>PssSetup</AssemblyName><Version>1.1.0</Version><Company>PSS</Company><Product>PSS Console Setup</Product><ApplicationIcon>../assets/icon.ico</ApplicationIcon><RuntimeIdentifier>win-x64</RuntimeIdentifier><SelfContained>true</SelfContained><PublishSingleFile>true</PublishSingleFile><EnableCompressionInSingleFile>true</EnableCompressionInSingleFile><IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract><EmbedPayload Condition="'$(EmbedPayload)'==''">false</EmbedPayload>
+  </PropertyGroup>
+  <ItemGroup><Resource Include="../public/fonts/*.TTF" Link="Brand/Fonts/%(Filename)%(Extension)"/><EmbeddedResource Include="../public/sounds/*.wav" Link="Brand/Sounds/%(Filename)%(Extension)" LogicalName="Sound.%(Filename)%(Extension)"/></ItemGroup>
+  <ItemGroup><Content Include="../native/SDL3.dll" Link="SDL3.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest"/></ItemGroup>
+  <ItemGroup Condition="'$(EmbedPayload)'=='true'"><EmbeddedResource Include="generated/payload.zip" LogicalName="PssSetup.Payload"/><EmbeddedResource Include="generated/payload.json" LogicalName="PssSetup.Manifest"/></ItemGroup>
+</Project>

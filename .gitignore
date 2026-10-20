@@ -1,0 +1,17 @@
+node_modules/
+dist/
+native/bin/
+native/obj/
+native/publish/
+native/download/
+native/SDL3.dll
+tests/fixtures/bin/
+tests/fixtures/obj/
+*.log
+public/fonts/
+public/sounds/
+installer/generated/
+installer/bin/
+installer/obj/
+installer/publish/
+installer/publish-uninstaller/
