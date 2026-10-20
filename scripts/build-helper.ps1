@@ -1,4 +1,10 @@
 $ErrorActionPreference = 'Stop'
+function Get-Sha256Hex([string]$FilePath) {
+    $algorithm = [System.Security.Cryptography.SHA256]::Create()
+    $stream = [System.IO.File]::OpenRead($FilePath)
+    try { return [BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-','') }
+    finally { $stream.Dispose(); $algorithm.Dispose() }
+}
 $sourceRoot = Split-Path -Parent $PSScriptRoot
 $nativeRoot = Join-Path $sourceRoot 'native'
 if (-not (Test-Path -LiteralPath (Join-Path $nativeRoot 'SDL3.dll'))) {
@@ -10,7 +16,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $nativeRoot 'SDL3.dll'))) {
     $zipPath = Join-Path $downloadRoot $asset.name
     Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath
     if ($asset.digest -like 'sha256:*') {
-        $actual = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $actual = (Get-Sha256Hex $zipPath).ToLowerInvariant()
         if ($actual -ne $asset.digest.Substring(7)) { throw 'SDL3 download checksum mismatch.' }
     }
     Expand-Archive -LiteralPath $zipPath -DestinationPath $downloadRoot -Force
@@ -19,7 +25,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $nativeRoot 'SDL3.dll'))) {
     $license = Get-ChildItem -LiteralPath $downloadRoot -Recurse -File | Where-Object { $_.Name -match 'LICENSE' } | Select-Object -First 1
     if ($license) { Copy-Item -LiteralPath $license.FullName -Destination (Join-Path $nativeRoot 'SDL-LICENSE.txt') }
     else { Invoke-WebRequest -Uri ('https://raw.githubusercontent.com/libsdl-org/SDL/' + $release.tag_name + '/LICENSE.txt') -OutFile (Join-Path $nativeRoot 'SDL-LICENSE.txt') }
-    @{ version = $release.tag_name; url = $asset.browser_download_url; sha256 = (Get-FileHash -LiteralPath $zipPath).Hash } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $nativeRoot 'sdl-version.json')
+    @{ version = $release.tag_name; url = $asset.browser_download_url; sha256 = (Get-Sha256Hex $zipPath) } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $nativeRoot 'sdl-version.json')
 }
 dotnet publish (Join-Path $nativeRoot 'PssHelper.csproj') -c Release -r win-x64 --self-contained true -o (Join-Path $nativeRoot 'publish')
 if ($LASTEXITCODE -ne 0) { throw 'Native helper build failed.' }
