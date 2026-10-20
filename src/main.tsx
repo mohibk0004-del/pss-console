@@ -1,4 +1,4 @@
-import React,{useState,useEffect,useRef,useCallback} from 'react';
+import React,{useState,useEffect,useLayoutEffect,useRef,useCallback} from 'react';
 import {createRoot} from 'react-dom/client';
 import {Search,Settings as SettingsIcon,UserRound,Power,Monitor,Home,Volume2,VolumeX,Gamepad2,Library,Plus,Heart,ArrowLeft,ArrowRight,Play,Globe,Music2,Film,ChevronRight,ChevronDown,Check,FolderSearch,Keyboard as KeyboardIcon,X,MoreHorizontal,RefreshCw,ExternalLink,LayoutGrid,Wifi,Clock3,LogOut,ImagePlus,FolderPlus,Trash2,CheckCircle2,AlertCircle,Loader2,Pause,Disc3,Sun,Moon,Download} from 'lucide-react';
 import type {Entry,State,ScanResult,Settings,Event} from './types';
@@ -13,22 +13,19 @@ type Panel='library'|'search'|'settings'|'control'|'add'|'scan'|'details'|'power
 const descriptions:Record<string,string>={Steam:'Your next adventure is waiting.',Riot:'Every round. Every decision. Make it count.',Epic:'Discover your next great escape.',Standalone:'Your games. Ready when you are.',Xbox:'Jump into your next adventure.'};
 function Logo({small=false}:{small?:boolean}){return <span className={'pss-logo '+(small?'small':'')} aria-label="PSS Console"><span className="logo-p">P</span><span className="logo-s">S</span><span className="logo-s second">S</span></span>}
 function ServiceMark({entry,large=false}:{entry:Entry;large?:boolean}){
+ const [failed,setFailed]=useState('');
  const key=entry.id.replace('media-','');
- if(entry.artwork)return <img className={'cover '+(entry.artwork.startsWith('data:')?'exe-icon':'')} src={entry.artwork} alt="" draggable={false}/>;
- if(key==='netflix')return <span className={'service-mark netflix '+(large?'large':'')}>N</span>;
- if(key==='spotify')return <svg className="service-svg spotify" viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="43" fill="currentColor"/><g fill="none" stroke="#081810" strokeWidth="7" strokeLinecap="round"><path d="M25 38 Q52 26 78 39"/><path d="M29 52 Q52 42 73 53"/><path d="M34 65 Q52 57 68 66"/></g></svg>;
- if(key==='youtube')return <svg className="service-svg youtube" viewBox="0 0 100 80" aria-hidden="true"><rect x="5" y="10" width="90" height="60" rx="18" fill="currentColor"/><path d="M42 27 L66 40 42 54Z" fill="#f5f5f5"/></svg>;
- if(key==='prime')return <span className="service-mark prime">prime<span>video</span><span className="smile">⌣</span></span>;
- if(key==='max')return <span className="service-mark max">max</span>;
- if(key==='jellyfin')return <svg className="service-svg jellyfin" viewBox="0 0 100 100" aria-hidden="true"><path d="M50 12 Q54 12 57 18 L90 78 Q95 88 84 88 H16 Q5 88 10 78 L43 18 Q46 12 50 12Z" fill="none" stroke="currentColor" strokeWidth="7"/><path d="M50 37 69 72 H31Z" fill="currentColor"/></svg>;
+ const brands:Record<string,string>={netflix:'netflix',spotify:'spotify',youtube:'youtube',prime:'primevideo',max:'hbomax',jellyfin:'jellyfin',browser:'brave'};
+ const src=entry.artwork||(brands[key]?('media/'+brands[key]+'.svg'):undefined);
+ if(src&&failed!==src)return <img className={'cover '+(entry.artwork?(entry.iconArtwork||entry.artwork.startsWith('data:')?'exe-icon':''):'brand-icon brand-'+key)} src={src} alt="" draggable={false} onError={()=>setFailed(src)}/>;
  if(entry.source==='Riot')return <span className="valorant-mark">V<span>RIOT GAMES</span></span>;
  if(key==='browser')return <Globe className="service-icon" strokeWidth={1.1}/>;
- if(entry.kind==='media')return <Film className="service-icon" strokeWidth={1}/>;
+ if(entry.kind==='media')return <span className="site-monogram" aria-hidden="true">{entry.title.slice(0,2).toUpperCase()}</span>;
  return <span className="fallback-game"><Gamepad2 strokeWidth={1}/><span>{entry.title}</span></span>;
 }
 function Modal({title,subtitle,onClose,children,wide=false,bottom=false}:{title:string;subtitle?:string;onClose:()=>void;children:React.ReactNode;wide?:boolean;bottom?:boolean}){
  const ref=useRef<HTMLDialogElement>(null);const closeRef=useRef(onClose);closeRef.current=onClose;
- useEffect(()=>{const before=document.activeElement as HTMLElement;ref.current?.showModal();return()=>{ref.current?.close();before?.focus();}},[]);
+ useLayoutEffect(()=>{const before=document.activeElement as HTMLElement;ref.current?.showModal();return()=>{ref.current?.close();before?.focus();}},[]);
  return <dialog ref={ref} className={'dialog '+(wide?'wide ':'')+(bottom?'bottom-dialog':'')} onCancel={e=>{e.preventDefault();closeRef.current();}} onClick={e=>{if(e.target===ref.current)closeRef.current();}}>
   <header className="dialog-header"><div><h2>{title}</h2>{subtitle&&<p>{subtitle}</p>}</div><button className="icon-button" aria-label="Close" onClick={onClose}><X/></button></header><div className="dialog-body">{children}</div>
  </dialog>;
@@ -44,6 +41,7 @@ function App(){
  const rail=useRef<HTMLDivElement>(null);const stateRef=useRef(state),inputHandler=useRef<(action:string)=>void>(()=>{});stateRef.current=state;
  const run=useCallback(async<T,>(op:string,data?:unknown):Promise<T|undefined>=>{try{return await api.invoke<T>(op,data);}catch(e){setNotice(String((e as Error).message).replace(/^Error invoking remote method '[^']+': Error: /,''));return undefined;}},[]);
  useConsoleSounds(state.settings.sounds);
+ useEffect(()=>{const mouse=()=>{document.documentElement.dataset.input='pointer';};window.addEventListener('pointerdown',mouse);return()=>window.removeEventListener('pointerdown',mouse);},[]);
  useEffect(()=>{void run<State>('state').then(s=>s&&setState(s));return api.onEvent((event:Event)=>{if(event.type==='state'&&event.state)setState(event.state);if(event.type==='input'&&event.action)inputHandler.current(event.action);if(event.type==='notice')setNotice(event.message||'');if(event.type==='home'){setKeyboardOnly(false);setSoftInput(null);setPanel(null);setTimeout(()=>document.querySelector<HTMLButtonElement>('.tile.selected')?.focus(),80);}if(event.type==='keyboard')setKeyboardOnly(!!event.data?.open);if(event.type==='desktop'){setPanel(null);setKeyboardOnly(false);setSoftInput(null);}});},[run]);
  useEffect(()=>{let timer:ReturnType<typeof setInterval>|undefined;const update=()=>{if(timer)clearInterval(timer);if(!document.hidden){setClock(new Date());timer=setInterval(()=>setClock(new Date()),15000);}};update();document.addEventListener('visibilitychange',update);return()=>{if(timer)clearInterval(timer);document.removeEventListener('visibilitychange',update);};},[]);
  useEffect(()=>{if(notice){const t=setTimeout(()=>setNotice(''),9000);return()=>clearTimeout(t);}},[notice]);
@@ -58,6 +56,7 @@ function App(){
  const showAdd=(e?:Entry)=>{setEdit(e);setForm({kind:e?.kind||tab,title:e?.title||'',target:e?.target||'',args:(e?.args||[]).map(a=>a.includes(' ')?'"'+a+'"':a).join(' '),cwd:e?.cwd||''});setPanel('add');};
  const back=()=>{if(softInput){setSoftInput(null);return;}if(keyboardOnly){void run('keyboardClose');return;}if(panel){setPanel(null);return;}setPanel('control');};
  inputHandler.current=(action)=>{
+  document.documentElement.dataset.input='controller';
   window.dispatchEvent(new CustomEvent('pss-controller',{detail:action}));
   if(['up','down','left','right'].includes(action)){moveFocus(action);return;}
   if(action==='confirm'){const el=document.activeElement as HTMLElement;if(el.id==='keyboard-text'){document.querySelector<HTMLButtonElement>('dialog:last-of-type .keyboard-rows button,.keyboard-only .keyboard-rows button')?.focus();return;}if((el instanceof HTMLInputElement&& !['checkbox','range'].includes(el.type))||el instanceof HTMLTextAreaElement){setSoftInput(el);return;}if(el instanceof HTMLButtonElement||el instanceof HTMLInputElement)el.click();else document.querySelector<HTMLButtonElement>('.tile.selected')?.focus();}
@@ -76,7 +75,7 @@ function App(){
  return <main className="console-shell" style={{'--entry-color':entry?.color||'#293e60'} as React.CSSProperties}>
   <div className="ambient" aria-hidden="true"/>
   {backdrop&&<div key={backdrop} className="game-backdrop" style={{backgroundImage:`url("${backdrop}")`}}/>}<div className="backdrop-shade"/>
-  <header className="topbar"><nav className="tabs" aria-label="Home screen"><button className={tab==='game'?'active':''} onClick={()=>changeTab('game')}>Games</button><button className={tab==='media'?'active':''} onClick={()=>changeTab('media')}>Media</button></nav><div className="top-tools"><button className="icon-button" aria-label="Search library" onClick={()=>{setQuery('');setPanel('search');}}><Search/></button><button className="icon-button" aria-label="Settings" onClick={()=>setPanel('settings')}><SettingsIcon/></button><button className="profile-avatar" aria-label="Profile" onClick={()=>setPanel('profile')}>{state.settings.profile.slice(0,1).toUpperCase()}</button><time>{clock.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}</time></div></header>
+  <header className="topbar"><nav className="tabs" aria-label="Home screen"><button className={tab==='game'?'active':''} onClick={()=>changeTab('game')}>Games</button><button className={tab==='media'?'active':''} onClick={()=>changeTab('media')}>Media</button></nav><div className="top-tools" aria-label="System controls"><button className="icon-button" aria-label="Search library" data-label="Search" onClick={()=>{setQuery('');setPanel('search');}}><Search/></button><button className="icon-button" aria-label="Settings" data-label="Settings" onClick={()=>setPanel('settings')}><SettingsIcon/></button><button className="profile-avatar" aria-label="Profile" data-label="Profile" onClick={()=>setPanel('profile')}>{state.settings.profile.slice(0,1).toUpperCase()}</button><time>{clock.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})}</time></div></header>
   <section className="home-content" aria-label={labelTab}>
    <div className="rail-wrap"><div ref={rail} className="tile-rail" aria-label={labelTab+' tiles'}>
     {sorted.map(e=><button key={e.id} className={'tile '+(entry?.id===e.id?'selected ':'')+(e.kind==='media'?'media-tile':'game-tile')} style={{'--tile-color':e.color||'#142337'} as React.CSSProperties} aria-label={e.title} aria-pressed={entry?.id===e.id} onFocus={()=>select(e)} onClick={()=>void launch(e)}><ServiceMark entry={e}/>{e.favorite&&<Heart className="favorite-dot" size={15} fill="currentColor"/>}<span className="tile-label">{e.title}</span></button>)}

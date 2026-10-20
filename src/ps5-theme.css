@@ -24,3 +24,16 @@ body{background:#101114}
 @media(max-height:650px){.feature{top:40vh}.feature h1,.feature h1.long-title{font-size:2.6em}.feature-actions{margin-top:1em}.feature-description{margin-top:.6em}.rail-wrap{min-height:158px}}
 @media(max-width:650px){.feature h1,.feature h1.long-title{font-size:2.7em}.tile{border-radius:12px}.bottom-bar{min-height:62px}.dialog.bottom-dialog{margin-bottom:2vh}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}[data-motion=reduce] *,[data-motion=reduce] *:before,[data-motion=reduce] *:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}
+/* System controls show focus for SDL input even after mouse use. */
+.top-tools button{position:relative;transition:transform 130ms var(--ease),background-color 130ms linear,outline-color 130ms linear;outline:2px solid transparent;outline-offset:5px}
+.top-tools button::after{content:attr(data-label);position:absolute;top:calc(100% + 13px);left:50%;transform:translate(-50%,-3px);opacity:0;pointer-events:none;white-space:nowrap;font-size:.65em;font-weight:400;color:#ededf0;transition:opacity 130ms linear,transform 130ms var(--ease)}
+.top-tools button:hover,.top-tools button:focus{background-color:#eeeeee1f;transform:scale(1.1)}
+.top-tools button:focus{outline-color:#eeeeee}
+.top-tools button:hover::after,.top-tools button:focus::after{opacity:1;transform:translate(-50%,0)}
+[data-input=controller] :is(button,input,select,textarea):focus{outline:2px solid #eeeeee;outline-offset:5px}
+.console-shell:has(.topbar :focus) .tile.selected{outline-color:#eeeeee55;box-shadow:none}
+.cover.brand-icon{object-fit:contain;width:100%;height:100%;padding:23%;background:#151518}
+.cover.brand-netflix{padding:20% 30%;background:#161616}.cover.brand-prime{padding:14%;background:#102b40}.cover.brand-max{padding:18%;background:#082bce}.cover.brand-jellyfin{padding:20%;background:#191523}.cover.brand-browser{padding:23%;background:#f3f3f3}
+.site-monogram{display:grid;place-items:center;width:100%;height:100%;font-size:2.5em;font-weight:300;color:#ececef;background:#33343a}
+@media(prefers-reduced-motion:reduce){.top-tools button,.top-tools button::after{transition:none;transform:none}.top-tools button::after{transform:translateX(-50%)}}
+[data-motion=reduce] .top-tools button,[data-motion=reduce] .top-tools button::after{transition:none}

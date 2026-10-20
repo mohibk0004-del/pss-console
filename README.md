@@ -4,7 +4,7 @@ A fullscreen PS5-style Games/Media launcher for Windows 11. Version 1.1 uses a c
 
 ## Run
 
-Use `PSS-Console-Setup-1.1.0-x64.exe` for a per-user installation and desktop shortcut. Opening the installed app enables startup after Windows sign-in by default. Change this under Settings → Launch at sign-in. The portable ZIP is also available; extract it completely before running PSS Console.exe. Retain it at a stable location if startup is enabled.
+Use `PSS-Console-Setup-1.1.1-x64.exe` for a per-user installation and desktop shortcut. Opening the installed app enables startup after Windows sign-in by default. Change this under Settings → Launch at sign-in. The portable ZIP is also available; extract it completely before running PSS Console.exe. Retain it at a stable location if startup is enabled.
 
 **Return to Windows:** select Windows in the footer/control center, or press **Ctrl + Alt + D**. Your games/apps remain open. Controller mouse mappings stop. Reopen PSS from its tray icon, desktop shortcut, or **Ctrl + Alt + Home**. The control center also offers Quit PSS Console, which exits the launcher/helper completely.
 

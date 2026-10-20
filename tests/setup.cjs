@@ -2,7 +2,7 @@ const fs=require('node:fs/promises'),path=require('node:path'),assert=require('n
 const root=path.resolve(__dirname,'..'),out=path.resolve(root,'..'),work=path.resolve(root,'..','..','work');
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 (async()=>{
- const setup=path.join(out,'PSS-Builds','PSS-Console-Setup-1.1.0-x64.exe'),dest=path.join(work,'Setup Test Console'),report={};
+ const setup=path.join(out,'PSS-Builds','PSS-Console-Setup-'+require('../package.json').version+'-x64.exe'),dest=path.join(work,'Setup Test Console'),report={};
  const run=async(args,name)=>{const resultFile=path.join(work,'setup-'+name+'.json');await fs.unlink(resultFile).catch(()=>{});await exec(setup,['--headless','--no-startup','--no-shortcut','--no-sounds','--destination='+dest,'--report='+resultFile,...args],{windowsHide:true,timeout:180000,maxBuffer:1024*1024});return JSON.parse(await fs.readFile(resultFile,'utf8'));};
  const userData=path.join(process.env.APPDATA,'pss-console','library.json');const original=await fs.readFile(userData,'utf8').catch(()=>null);
  try{
