@@ -76,7 +76,7 @@ static class Program
             case "sleep": Reply(c,true); System.Windows.Forms.Application.SetSuspendState(System.Windows.Forms.PowerState.Suspend,false,false);break;
             case "windows": Reply(c,Windows());break;
             case "discover": Reply(c,Discover());break;
-            case "icon": Reply(c,IconFor(Str(d,"path")));break;
+            case "icon": Reply(c,IconFor(Str(d,"path"),d.TryGetProperty("index",out var iconIndex)?iconIndex.GetInt32():0));break;
             case "quit": Release();Reply(c,true);Alive=false;break;
             default: throw new InvalidOperationException("Unknown helper command.");
         }
@@ -148,9 +148,9 @@ static class Program
         EnumWindows((hwnd,l)=>{if(!IsWindowVisible(hwnd))return true;var title=new StringBuilder(1024);GetWindowText(hwnd,title,title.Capacity);if(title.Length==0)return true;GetWindowThreadProcessId(hwnd,out uint pid);try{var p=Process.GetProcessById((int)pid);result.Add(new{window=hwnd.ToInt64().ToString(),pid,title=title.ToString(),process=p.ProcessName});}catch{}return true;},0);
         return result.ToArray();
     }
-    static string? IconFor(string file)
+    static string? IconFor(string file,int index=0)
     {
-        try {if(!File.Exists(file))return null;using var icon=Icon.ExtractAssociatedIcon(file);if(icon==null)return null;using var bmp=icon.ToBitmap();using var stream=new MemoryStream();bmp.Save(stream,ImageFormat.Png);return "data:image/png;base64,"+Convert.ToBase64String(stream.ToArray());}catch{return null;}
+        try {if(!File.Exists(file))return null;using var icon=Icon.ExtractIcon(file,index,128)??Icon.ExtractAssociatedIcon(file);if(icon==null)return null;using var bmp=icon.ToBitmap();using var stream=new MemoryStream();bmp.Save(stream,ImageFormat.Png);return "data:image/png;base64,"+Convert.ToBase64String(stream.ToArray());}catch{return null;}
     }
     static object Discover()
     {

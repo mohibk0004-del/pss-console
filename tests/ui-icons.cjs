@@ -43,9 +43,10 @@ const delay=ms=>new Promise(r=>setTimeout(r,ms));
   report.bundledBrandIcons=await page.locator('.brand-icon').count();
   const game=path.join(process.env.WINDIR,'System32','notepad.exe'),shortcut=path.join(work,'Icon Test Shortcut.lnk');
   await exec('powershell.exe',['-NoProfile','-NonInteractive','-Command',"$link=(New-Object -ComObject WScript.Shell).CreateShortcut($env:PSS_ICON_LINK);$link.TargetPath=$env:PSS_ICON_EXE;$link.IconLocation=$env:PSS_ICON_EXE+',0';$link.Save()"],{windowsHide:true,env:{...process.env,PSS_ICON_LINK:shortcut,PSS_ICON_EXE:game}});
+  let executableIcon;
   for(const target of [game,shortcut]){
    await invoke('add',{kind:'game',title:'Icon Test '+path.extname(target),target});
-   const e=(await invoke('state')).entries.find(e=>e.target===target);assert.ok(e.artwork?.startsWith('data:image/png;base64,'));assert.ok(e.iconArtwork);report[path.extname(target)+'Icon']=true;
+   const e=(await invoke('state')).entries.find(e=>e.target===target);assert.ok(e.artwork?.startsWith('data:image/png;base64,'));assert.ok(e.iconArtwork);if(target===game)executableIcon=e.artwork;else assert.equal(e.artwork,executableIcon,'Shortcut must resolve target icon, not generic .lnk icon');report[path.extname(target)+'Icon']=true;
   }
   const target='http://127.0.0.1:'+server.address().port+'/';await invoke('add',{kind:'media',title:'Local Icon Test',target});
   const custom=(await invoke('state')).entries.find(e=>e.target===target);assert.ok(custom.artwork?.startsWith('pss-asset:'));assert.ok(custom.iconArtwork);

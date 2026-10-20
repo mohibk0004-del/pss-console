@@ -64,7 +64,15 @@ async function hydrateArt(list){
  async function worker(){while(next<tasks.length){const e=tasks[next++];for(const [field,name] of [['artwork','library_600x900.jpg'],['backdrop','library_hero.jpg']]){if(e[field]&&await c.exists(e[field]))continue;const file=path.join(userDir(),'artwork',e.steamId+'-'+name);if(await c.exists(file)){e[field]=file;continue;}try{const res=await fetch('https://cdn.akamai.steamstatic.com/steam/apps/'+e.steamId+'/'+name,{signal:AbortSignal.timeout(4500)});if(!res.ok||!res.headers.get('content-type')?.startsWith('image/'))continue;const data=Buffer.from(await res.arrayBuffer());if(data.length>8*1024*1024)continue;await fs.writeFile(file,data);e[field]=file;}catch{}}}}
  await Promise.all([worker(),worker(),worker()]);
  // Use local executable icons only when a title has no cover.
- for(const e of list.filter(e=>!e.artwork&&['exe','shortcut'].includes(e.launchType))){try{const icon=await app.getFileIcon(e.target,{size:'large'});if(!icon.isEmpty()){e.artwork=icon.toDataURL();e.iconArtwork=true;}}catch{}}
+ for(const e of list.filter(e=>['exe','shortcut'].includes(e.launchType)&&(!e.artwork||(!e.customArtwork&&(e.iconArtwork||e.artwork.startsWith('data:image/'))&&e.iconVersion!==2)))){
+  try{
+   const link=e.launchType==='shortcut'?shell.readShortcutLink(e.target):{target:e.target};
+   const sources=[...(link.icon?[{path:link.icon,index:link.iconIndex||0}]:[]),{path:link.target,index:0}];let data;
+   for(const source of sources){if(!await c.exists(source.path))continue;data=await rpc('icon',source).catch(()=>null);if(data)break;}
+   if(!data){const icon=await app.getFileIcon(link.target||e.target,{size:'large'});if(!icon.isEmpty())data=icon.toDataURL();}
+   if(data){e.artwork=data;e.iconArtwork=true;e.iconVersion=2;}
+  }catch{}
+ }
  const sites=list.filter(e=>!e.artwork&&e.launchType==='web'&&!e.id.startsWith('media-'));let siteIndex=0;
  async function siteWorker(){while(siteIndex<sites.length){const e=sites[siteIndex++];e.artwork=await websiteIcon(e.target,path.join(userDir(),'artwork'),e.id);if(e.artwork)e.iconArtwork=true;}}
  await Promise.all([siteWorker(),siteWorker(),siteWorker()]);
