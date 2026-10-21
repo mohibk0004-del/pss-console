@@ -74,6 +74,8 @@ npm start
 npm test
 npm run smoke
 node tests/integration.cjs
+node tests/console-flow.cjs
+node tests/game-errors.cjs
 node tests/standalone.cjs
 node tests/performance.cjs
 npm run package

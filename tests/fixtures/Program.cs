@@ -12,6 +12,7 @@ static class Program {
   }
   using var window=new Form {Text=Value("--title","PSS Standalone Probe"),Width=700,Height=350,StartPosition=FormStartPosition.CenterScreen,BackColor=Color.FromArgb(16,29,45),ForeColor=Color.White};
   window.Controls.Add(new Label {Text="PSS standalone launch check\nTemporary test window. No game files modified.",Dock=DockStyle.Fill,TextAlign=ContentAlignment.MiddleCenter,Font=new Font("Segoe UI",20)});
+  if(args.Contains("--modal-error"))window.Shown+=(_,_)=>window.BeginInvoke(new Action(()=>{MessageBox.Show("Probe runtime unavailable. Update required.","PSS Probe - System Error");window.Close();}));
   window.Shown+=(_,_)=>{var index=Array.IndexOf(args,"--report");if(index>=0&&index+1<args.Length)File.WriteAllText(args[index+1],JsonSerializer.Serialize(new {args,cwd=Environment.CurrentDirectory}));if(args.Contains("--minimized"))window.WindowState=FormWindowState.Minimized;};
   using var commands=new System.Windows.Forms.Timer {Interval=100};
   Form current=window;Form? blocker=null;

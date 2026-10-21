@@ -94,7 +94,7 @@ function updateSessions(){
   const gameCandidates=e.kind==='game'?windows.filter(w=>matchWindow(e,w,s.before,s)).sort((a,b)=>windowScore(e,b,s)-windowScore(e,a,s)||Number(readyWindow(b))-Number(readyWindow(a))||Number(b.foreground)-Number(a.foreground)):[];
   const attention=gameCandidates.find(w=>/\b(?:system error|application error|fatal error)\b/i.test(w.title)||(w.className==='#32770'&&w.foreground));
   if(attention&&e.id!=='riot-valorant'&&activeSessionId===id&&consoleMode&&(handoff?.id===id||mode==='game')&&!handoff?.failed)void gameAttention(id,attention);
-  const found=e.kind==='game'?gameCandidates[0]:(s.window?windows.find(w=>w.window===s.window):null)||windows.find(w=>matchWindow(e,w,s.before,s));
+  const found=e.kind==='game'?(attention&&activeSessionId===id&&e.id!=='riot-valorant'?attention:gameCandidates[0]):(s.window?windows.find(w=>w.window===s.window):null)||windows.find(w=>matchWindow(e,w,s.before,s));
   if(found){
    if(s.window!==found.window)changed=true;s.window=found.window;s.pid=found.pid;s.seen=true;s.misses=0;s.missingSince=0;
    if(handoff?.id===id&&handoff.phase==='launching'&&!handoff.failed&&!handoff.busy){
