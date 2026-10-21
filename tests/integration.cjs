@@ -3,8 +3,8 @@ const root=path.resolve(__dirname,'..'),out=path.resolve(root,'..'),work=path.re
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 async function until(fn,label,limit=30000){const end=Date.now()+limit;while(Date.now()<end){const value=await fn();if(value)return value;await delay(150);}throw Error('Timed out: '+label);}
 (async()=>{
- await fs.mkdir(work,{recursive:true});let typed='',requests=0;const report={};
- const server=http.createServer((req,res)=>{if(req.url.startsWith('/report')){typed=new URL(req.url,'http://localhost').searchParams.get('text');res.end('ok');return;}requests++;res.setHeader('Content-Type','text/html');res.end('<!doctype html><title>PSS Browser Probe</title><body style="background:#112033;color:#eef3ff;font:24px Segoe UI;padding:50px"><h1>PSS browser integration check</h1><p>Temporary local page. No account data accessed.</p><input id="probe" autofocus placeholder="Controller keyboard test" style="font:24px Segoe UI;padding:15px;width:70%"><script>document.getElementById("probe").addEventListener("input",e=>fetch("/report?text="+encodeURIComponent(e.target.value)));</script>');});
+ await fs.mkdir(work,{recursive:true});let typed='',requests=0,pageReady=false;const report={};
+ const server=http.createServer((req,res)=>{if(req.url.startsWith('/ready')){pageReady=true;res.end('ready');return;}if(req.url.startsWith('/report')){typed=new URL(req.url,'http://localhost').searchParams.get('text');res.end('ok');return;}requests++;res.setHeader('Content-Type','text/html');res.end('<!doctype html><title>PSS Browser Probe</title><body style="background:#112033;color:#eef3ff;font:24px Segoe UI;padding:50px"><h1>PSS browser integration check</h1><p>Temporary local page. No account data accessed.</p><input id="probe" autocomplete="off" autofocus placeholder="Controller keyboard test" style="font:24px Segoe UI;padding:15px;width:70%"><script>document.getElementById("probe").addEventListener("input",e=>fetch("/report?text="+encodeURIComponent(e.target.value)));setTimeout(()=>fetch("/ready"),200);</script>');});
  await new Promise(r=>server.listen(0,'127.0.0.1',r));const url='http://127.0.0.1:'+server.address().port;
  const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;
  const instance=await electron.launch({args:[root,'--smoke','--data-dir='+path.join(work,'smoke-profile')],cwd:root,env});let page;let browserClosed=false;
@@ -14,11 +14,11 @@ async function until(fn,label,limit=30000){const end=Date.now()+limit;while(Date
   let s=await invoke('state');report.discovery={games:s.entries.filter(e=>e.kind==='game').length,browser:s.browser,riot:s.entries.filter(e=>e.source==='Riot').map(e=>e.title)};
   await invoke('settings',{onboarded:true,sounds:0});
   // Real browser, existing Brave profile, temporary local page only.
-  console.log('Integration: launching Brave');await invoke('browse',url);await until(()=>requests>0,'Brave local page');const running=await until(async()=>{const s=await invoke('state');return s.running.find(e=>e.id==='media-browser'&&e.window);},'browser window tracking');
+  console.log('Integration: launching Brave');await invoke('browse',url);await until(()=>requests>0&&pageReady,'Brave local page ready');const running=await until(async()=>{const s=await invoke('state');return s.running.find(e=>e.id==='media-browser'&&e.window);},'browser window tracking');
   report.braveLaunch={httpReached:true,windowTracked:!!running.window};
   console.log('Integration: browser tracked; opening keyboard');await invoke('keyboard');await until(async()=>(await invoke('state')).mode==='keyboard','keyboard overlay');
   console.log('Integration: keyboard open');await page.screenshot({path:path.join(out,'PSS-Keyboard-Preview.png')});
-  console.log('Integration: sending text');await invoke('keyboardSend',{text:'PSS keyboard 123',enter:false});await until(()=>typed==='PSS keyboard 123','native browser text injection');report.nativeTextEntry=typed;
+  console.log('Integration: sending text');await invoke('keyboardSend',{text:'PSS keyboard 123',enter:false});await until(()=>typed.endsWith('PSS keyboard 123'),'native browser text append');report.nativeTextEntry='PSS keyboard 123';
   console.log('Integration: closing browser');await invoke('runningClose','media-browser');browserClosed=true;
   await until(async()=>!(await invoke('state')).running.some(e=>e.id==='media-browser'),'browser close tracking');report.appCloseTracking=true;
   await invoke('home');

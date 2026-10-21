@@ -29,12 +29,12 @@ try { $payloadHash = [BitConverter]::ToString($hashAlgorithm.ComputeHash($hashSt
 finally { $hashStream.Dispose(); $hashAlgorithm.Dispose() }
 $totalBytes = 0L
 foreach ($appFile in $appFiles) { $totalBytes += $appFile.Length }
-$manifest = @{ Version='1.1.1'; Sha256=$payloadHash; UncompressedBytes=$totalBytes; Files=$appFiles.Count }
+$manifest = @{ Version='1.2.0'; Sha256=$payloadHash; UncompressedBytes=$totalBytes; Files=$appFiles.Count }
 $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $generated 'payload.json') -Encoding utf8
 $setupOutput = Join-Path $installerRoot 'publish'
 dotnet publish (Join-Path $installerRoot 'PssSetup.csproj') -c Release -r win-x64 --self-contained true '-p:EmbedPayload=true' -o $setupOutput
 if ($LASTEXITCODE -ne 0) { throw 'Custom setup build failed.' }
-Copy-Item -LiteralPath (Join-Path $setupOutput 'PssSetup.exe') -Destination (Join-Path $outputRoot 'PSS-Console-Setup-1.1.1-x64.exe') -Force
-$portable = Join-Path $outputRoot 'PSS-Console-Portable-1.1.1-x64.zip'
+Copy-Item -LiteralPath (Join-Path $setupOutput 'PssSetup.exe') -Destination (Join-Path $outputRoot 'PSS-Console-Setup-1.2.0-x64.exe') -Force
+$portable = Join-Path $outputRoot 'PSS-Console-Portable-1.2.0-x64.zip'
 Copy-Item -LiteralPath $payload -Destination $portable -Force
-Get-Item -LiteralPath (Join-Path $outputRoot 'PSS-Console-Setup-1.1.1-x64.exe'),$portable | Select-Object Name,Length
+Get-Item -LiteralPath (Join-Path $outputRoot 'PSS-Console-Setup-1.2.0-x64.exe'),$portable | Select-Object Name,Length

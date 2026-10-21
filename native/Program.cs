@@ -52,7 +52,7 @@ static class Program
                     if(Environment.TickCount64>=nextDevices) { UpdateDevices(); nextDevices=Environment.TickCount64+1000; }
                     if(Pad!=0) Poll();
                 }
-                if(Environment.TickCount64>=nextStatus) { Emit(new { type="windows", data=Windows() });nextStatus=Environment.TickCount64+(Mode=="desktop"?8000:2000); }
+                if(Environment.TickCount64>=nextStatus) { Emit(new { type="windows", data=Windows() });nextStatus=Environment.TickCount64+(Mode=="desktop"?8000:Mode=="launching"?400:Mode=="game"||Mode=="overlay"?1000:2000); }
                 // No 60 Hz wakeups without a controller; desktop never needs pointer polling.
                 Thread.Sleep(Mode=="desktop"?200:Pad==0?100:Mode=="game"?33:16);
             }
@@ -67,14 +67,15 @@ static class Program
         switch(op) {
             case "mode": Mode=Str(d,"mode","desktop");Browser=Str(d,"browser","brave");ShellWindow=(nint)(d.TryGetProperty("window",out var h)?h.GetInt64():0); Release(); Reply(c,true);break;
             case "keyboardPrepare": if(long.TryParse(Str(d,"window"),out var browserHandle)&&IsWindow((nint)browserHandle)){GetWindowThreadProcessId((nint)browserHandle,out var browserPid);try{if(Process.GetProcessById((int)browserPid).ProcessName.Equals(Browser,StringComparison.OrdinalIgnoreCase))LastBrowserWindow=(nint)browserHandle;}catch{}}else IsBrowserForeground();Reply(c,LastBrowserWindow!=0&&IsWindow(LastBrowserWindow));break;
-            case "text": if(Mode=="browser" || Mode=="keyboard") { if(LastBrowserWindow!=0)Focus(LastBrowserWindow);if(GetForegroundWindow()==LastBrowserWindow&&IsBrowserForeground())TypeText(Str(d,"text"));else throw new InvalidOperationException("Windows couldn't focus the selected browser window. Focus it and try again."); } else throw new InvalidOperationException("Browser keyboard is not active.");Reply(c,true);break;
+            case "text": if(Mode=="browser" || Mode=="keyboard") { if(LastBrowserWindow!=0){Focus(LastBrowserWindow);Thread.Sleep(80);}if(GetForegroundWindow()==LastBrowserWindow&&IsBrowserForeground())TypeText(Str(d,"text"));else throw new InvalidOperationException("Windows couldn't focus the selected browser window. Focus it and try again."); } else throw new InvalidOperationException("Browser keyboard is not active.");Reply(c,true);break;
             case "key": if(IsBrowserForeground()) { Key(Str(d,"key") switch {"enter"=>0x0D,"backspace"=>0x08,"tab"=>0x09,_=>0x1B}); }Reply(c,true);break;
             case "desktop": Mode="desktop";Release();try {var type=Type.GetTypeFromProgID("Shell.Application");if(type!=null){dynamic shell=Activator.CreateInstance(type)!;shell.MinimizeAll();Marshal.FinalReleaseComObject(shell);}}catch{}Reply(c,true);break;
             case "focus": var hwnd=(nint)long.Parse(Str(d,"window","0")); Focus(hwnd);Reply(c,GetForegroundWindow()==hwnd);break;
-            case "close": var closing=(nint)long.Parse(Str(d,"window","0"));if(IsWindow(closing))PostMessage(closing,0x0010,0,0);Reply(c,true);break;
+            case "close": var closing=(nint)long.Parse(Str(d,"window","0"));Reply(c,IsWindow(closing)&&PostMessage(closing,0x0010,0,0));break;
             case "volume": Key(Str(d,"action") switch {"up"=>0xAF,"down"=>0xAE,_=>0xAD});Reply(c,true);break;
             case "sleep": Reply(c,true); System.Windows.Forms.Application.SetSuspendState(System.Windows.Forms.PowerState.Suspend,false,false);break;
             case "windows": Reply(c,Windows());break;
+            case "processAlive": bool alive=false;if(d.TryGetProperty("pid",out var processId))try{using var process=Process.GetProcessById(processId.GetInt32());alive=!process.HasExited;}catch{}Reply(c,alive);break;
             case "discover": Reply(c,Discover());break;
             case "icon": Reply(c,IconFor(Str(d,"path"),d.TryGetProperty("index",out var iconIndex)?iconIndex.GetInt32():0));break;
             case "quit": Release();Reply(c,true);Alive=false;break;
@@ -103,9 +104,10 @@ static class Program
     {
         var now=Environment.TickCount64;var b=new bool[26];for(int i=0;i<b.Length;i++)b[i]=SDL_GetGamepadButton(Pad,i);
         bool chord=b[4]&&b[6];
-        if(chord&&Mode!="desktop") {if(ChordStart==0)ChordStart=now;if(now-ChordStart>=1000&&!ChordFired){ChordFired=true;Release();Mode="shell";Emit(new {type="input",action="home"});}}
+        if(chord&&Mode!="desktop") {if(ChordStart==0)ChordStart=now;if(now-ChordStart>=1000&&!ChordFired){ChordFired=true;Release();Emit(new {type="input",action="system"});}}
         else {ChordStart=0;ChordFired=false;}
         if(Mode=="desktop"){Previous=b;return;}
+        if(b[5]&&!Previous[5]){Release();Emit(new {type="input",action="system"});}
         bool shell=GetForegroundWindow()==ShellWindow;
         if(Mode=="browser"&&!shell&&IsBrowserForeground()) {
             float x=Axis(0),y=Axis(1),scroll=Axis(3);int dx=(int)(x*Math.Abs(x)*23),dy=(int)(y*Math.Abs(y)*23);
@@ -119,7 +121,7 @@ static class Program
             if(b[11]&&!Previous[11])Key(0x26);if(b[12]&&!Previous[12])Key(0x28);if(b[13]&&!Previous[13])Key(0x25);if(b[14]&&!Previous[14])Key(0x27);
         } else {
             Release();
-            if(shell) {
+            if(shell&&(Mode=="shell"||Mode=="overlay"||Mode=="keyboard"||Mode=="launching")) {
                 Input("up",b[11]||Axis(1)<-.6,now);Input("down",b[12]||Axis(1)>.6,now);Input("left",b[13]||Axis(0)<-.6,now);Input("right",b[14]||Axis(0)>.6,now);
                 if(b[0]&&!Previous[0])Emit(new {type="input",action="confirm"});
                 if(b[1]&&!Previous[1])Emit(new {type="input",action="back"});
@@ -139,13 +141,17 @@ static class Program
     static void Key(int code){KeyDown(code);KeyUp(code);}
     static void KeyDown(int code)=>Send(new INPUT{type=1,u=new InputUnion{ki=new KEYBDINPUT{wVk=(ushort)code}}});
     static void KeyUp(int code)=>Send(new INPUT{type=1,u=new InputUnion{ki=new KEYBDINPUT{wVk=(ushort)code,dwFlags=2}}});
-    static void TypeText(string text){foreach(char c in text.Take(4096)){Send(new INPUT{type=1,u=new InputUnion{ki=new KEYBDINPUT{wScan=c,dwFlags=4}}},true);Send(new INPUT{type=1,u=new InputUnion{ki=new KEYBDINPUT{wScan=c,dwFlags=6}}},true);}}
+    static void TypeText(string text){
+        int length=Math.Min(text.Length,4096);var input=new INPUT[length*2];
+        for(int i=0;i<length;i++){input[i*2]=new INPUT{type=1,u=new InputUnion{ki=new KEYBDINPUT{wScan=text[i],dwFlags=4}}};input[i*2+1]=new INPUT{type=1,u=new InputUnion{ki=new KEYBDINPUT{wScan=text[i],dwFlags=6}}};}
+        if(input.Length>0&&SendInput((uint)input.Length,input,Marshal.SizeOf<INPUT>())!=(uint)input.Length)throw new InvalidOperationException("Windows blocked text input. Focus the normal, non-administrator browser and try again.");
+    }
     static void Mouse(int dx,int dy,int data,uint flags)=>Send(new INPUT{type=0,u=new InputUnion{mi=new MOUSEINPUT{dx=dx,dy=dy,mouseData=unchecked((uint)data),dwFlags=flags}}});
     static void Send(INPUT input,bool strict=false){if(SendInput(1,new[]{input},Marshal.SizeOf<INPUT>())==0&&strict)throw new InvalidOperationException("Windows blocked text input. Focus the normal, non-administrator browser and try again.");}
     static object[] Windows()
     {
         var result=new List<object>();
-        EnumWindows((hwnd,l)=>{if(!IsWindowVisible(hwnd))return true;var title=new StringBuilder(1024);GetWindowText(hwnd,title,title.Capacity);if(title.Length==0)return true;GetWindowThreadProcessId(hwnd,out uint pid);try{var p=Process.GetProcessById((int)pid);result.Add(new{window=hwnd.ToInt64().ToString(),pid,title=title.ToString(),process=p.ProcessName});}catch{}return true;},0);
+        EnumWindows((hwnd,l)=>{if(!IsWindowVisible(hwnd))return true;var title=new StringBuilder(1024);GetWindowText(hwnd,title,title.Capacity);if(title.Length==0)return true;GetWindowThreadProcessId(hwnd,out uint pid);try{var p=Process.GetProcessById((int)pid);result.Add(new{window=hwnd.ToInt64().ToString(),pid,title=title.ToString(),process=p.ProcessName,foreground=hwnd==GetForegroundWindow()});}catch{}return true;},0);
         return result.ToArray();
     }
     static string? IconFor(string file,int index=0)

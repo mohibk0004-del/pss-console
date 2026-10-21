@@ -12,6 +12,8 @@ const delay=ms=>new Promise(r=>setTimeout(r,ms));
   await invoke('settings',{startup:false,onboarded:true,sounds:0});assert.equal(await readStartup(),'');report.startupDisable=true;
   await invoke('settings',{startup:true});const registry=await readStartup();assert.ok(registry.includes('"'+executable+'" --startup'));report.startupEnable=true;report.startup={registry:registry.trim(),electronQuery:await instance.evaluate(({app})=>app.getLoginItemSettings({path:process.execPath,args:['--startup']}))};
   report.shortcuts=await instance.evaluate(({globalShortcut})=>({home:globalShortcut.isRegistered('CommandOrControl+Alt+Home'),desktop:globalShortcut.isRegistered('CommandOrControl+Alt+D'),keyboard:globalShortcut.isRegistered('CommandOrControl+Alt+K')}));assert.ok(Object.values(report.shortcuts).every(Boolean));
+  await exec('powershell.exe',['-NoProfile','-NonInteractive','-Command',"(New-Object -ComObject WScript.Shell).SendKeys('^%{HOME}')"],{windowsHide:true});
+  await page.getByRole('heading',{name:'Control center',exact:true}).waitFor();await page.getByRole('button',{name:'Close',exact:true}).click();report.globalMenuShortcut=true;
   await invoke('desktop');assert.equal((await invoke('state')).mode,'desktop');assert.equal(await instance.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].isVisible()),false);await invoke('home');assert.equal(await instance.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].isFullScreen()),true);report.fullscreenDesktopRoundtrip=true;
   report.status='passed';
  }catch(e){report.status='failed';report.error=e.stack;throw e;

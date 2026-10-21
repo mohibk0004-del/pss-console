@@ -1,6 +1,6 @@
 const {app,BrowserWindow,ipcMain,dialog,Tray,Menu,nativeImage,globalShortcut,shell,protocol,net,screen}=require('electron');
 const fs=require('node:fs/promises');const path=require('node:path');const {spawn}=require('node:child_process');const readline=require('node:readline');const {pathToFileURL}=require('node:url');
-const c=require('./catalog.cjs');const {websiteIcon}=require('./icons.cjs');const {discover,splitArguments}=require('./discovery.cjs');
+const {matchesGame}=require('./sessions.cjs');const c=require('./catalog.cjs');const {websiteIcon}=require('./icons.cjs');const {discover,splitArguments}=require('./discovery.cjs');
 const TEST=process.argv.includes('--smoke');
 const dataFlag=process.argv.find(x=>x.startsWith('--data-dir='));if(dataFlag)app.setPath('userData',dataFlag.slice(11));
 protocol.registerSchemesAsPrivileged([{scheme:'pss-asset',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
@@ -9,13 +9,13 @@ let seq=0,pending=new Map(),controller={connected:false,name:'No controller',fam
 let entries=[],settings={startup:!TEST,reducedMotion:false,sounds:.15,profile:process.env.USERNAME||'Player',jellyfin:'http://127.0.0.1:8096',folders:[],browser:'',uiScale:1,onboarded:false};
 let system={installed:[],shortcuts:[]},windows=[],running=[],warnings=[],browser='',mode='shell';let storeQueue=Promise.resolve();let scanPromise=null;let scanCache=null;let keyboardBounds;let discovering=true;
 const assetPaths=new Map();
-const sessions=new Map();let hiddenIds=new Set();
+const sessions=new Map();let hiddenIds=new Set();let activeSessionId=null,overlayId=null,handoff=null,handoffTimer=null,presentationEpoch=0;
 const userDir=()=>app.getPath('userData');
 const helperExe=()=>path.join(app.isPackaged?path.join(process.resourcesPath,'helper'):path.join(__dirname,'..','native','publish'),'PssHelper.exe');
 function emit(event){if(win&&!win.isDestroyed())win.webContents.send('pss:event',event);}
 function asset(file){if(!file)return undefined;if(file.startsWith('data:image/'))return file;const id=c.idFor(file);assetPaths.set(id,file);return 'pss-asset://local/'+id;}
 function publicEntry(e){return {...e,artwork:asset(e.artwork),backdrop:asset(e.backdrop)};}
-function state(){return {entries:entries.map(publicEntry),settings,controller,running,helper:ready,version:app.getVersion(),mode:consoleMode?mode:'desktop',browser:browser?path.basename(browser,'.exe'):'Default browser',warnings,discovering};}
+function state(){return {entries:entries.map(publicEntry),settings,controller,running,helper:ready,version:app.getVersion(),mode:consoleMode?mode:'desktop',browser:browser?path.basename(browser,'.exe'):'Default browser',warnings,discovering,overlayId,handoff};}
 function publish(){emit({type:'state',state:state()});}
 function save(){storeQueue=storeQueue.catch(()=>{}).then(async()=>{await fs.mkdir(userDir(),{recursive:true});const file=path.join(userDir(),'library.json');await fs.writeFile(file+'.tmp',JSON.stringify({version:1,entries,settings,hiddenIds:[...hiddenIds]},null,2),'utf8');await fs.rename(file+'.tmp',file);});return storeQueue;}
 function rpc(op,data={},timeout=20000){return new Promise((resolve,reject)=>{if(!helper||helper.killed||!helper.stdin.writable)return reject(new Error('Windows helper is unavailable. Restart PSS Console.'));const id=++seq;const timer=setTimeout(()=>{pending.delete(id);reject(new Error('Windows helper timed out: '+op));},timeout);pending.set(id,{resolve,reject,timer});helper.stdin.write(JSON.stringify({id,op,data})+'\n');});}
@@ -31,7 +31,7 @@ function startHelper(){
   if(event.type==='ready'){ready=true;if(!event.sdl)warnings.push('Controller support did not initialize. Keyboard and mouse remain available.');setMode(consoleMode?'shell':'desktop');publish();return;}
   if(event.type==='controller'){const changed=JSON.stringify(controller)!==JSON.stringify(event.data);controller=event.data;if(changed)publish();return;}
   if(event.type==='windows'){windows=event.data;updateSessions();return;}
-  if(event.type==='input'){if(event.action==='home'){home();return;}if(event.action==='keyboard'){openKeyboard();return;}emit(event);return;}
+  if(event.type==='input'){if(event.action==='system'){void systemMenu().catch(err=>log(err.message));return;}if(event.action==='home'){home();return;}if(event.action==='keyboard'){openKeyboard();return;}emit(event);return;}
   if(event.type==='error'){log(event.message);emit({type:'notice',message:event.message});}
  }catch(e){log('Invalid helper event: '+e.message);}});
  helper.on('exit',code=>{ready=false;for(const p of pending.values()){clearTimeout(p.timer);p.reject(new Error('Windows helper stopped.'));}pending.clear();if(!quitting){warnings.push('Windows helper stopped. Restart PSS Console to restore controller support.');publish();log('helper exited: '+code);}});
@@ -77,28 +77,79 @@ async function hydrateArt(list){
  async function siteWorker(){while(siteIndex<sites.length){const e=sites[siteIndex++];e.artwork=await websiteIcon(e.target,path.join(userDir(),'artwork'),e.id);if(e.artwork)e.iconArtwork=true;}}
  await Promise.all([siteWorker(),siteWorker(),siteWorker()]);
 }
-function matchWindow(entry,w,before){
+function matchWindow(entry,w,before,session){
  if(w.pid===process.pid||w.process==='PssHelper'||!w.title)return false;
- const normalize=s=>s.toLowerCase().replace(/[^a-z0-9]/g,'');const title=normalize(entry.title),wt=normalize(w.title);
- if(entry.kind==='media')return path.basename(browser||'brave.exe','.exe').toLowerCase()===w.process.toLowerCase()&&(!before.has(w.window)||wt.includes(normalize(entry.title.split(' / ')[0])));
- if(title.length>=3&&wt.includes(title))return true;
- if(entry.launchType==='exe'&&w.process.toLowerCase()===path.basename(entry.target,'.exe').toLowerCase()&&!/RiotClientServices|Battle.net|EADesktop|UbisoftConnect/i.test(w.process))return true;
- return false;
+ const normalize=s=>s.toLowerCase().replace(/[^a-z0-9]/g,'');
+ if(entry.kind==='media')return path.basename(browser||'brave.exe','.exe').toLowerCase()===w.process.toLowerCase()&&!before.has(w.window);
+ return matchesGame(entry,w,session);
+}
+function clearHandoff(){if(handoffTimer)clearTimeout(handoffTimer);handoffTimer=null;handoff=null;}
+function endSession(id,s){
+ if(sessions.get(id)!==s)return;sessions.delete(id);
+ if(consoleMode&&!keyboardOpen&&activeSessionId===id&&(mode==='game'||mode==='browser'||overlayId===id||handoff?.id===id))void home();
 }
 function updateSessions(){
  let changed=false;
- for(const [id,s]of sessions){const e=entries.find(e=>e.id===id);if(!e){sessions.delete(id);continue;}const found=(s.window?windows.find(w=>w.window===s.window):null)||windows.find(w=>!s.before.has(w.window)&&matchWindow(e,w,s.before))||windows.find(w=>matchWindow(e,w,s.before));
-  if(found){if(s.window!==found.window)changed=true;s.window=found.window;s.pid=found.pid;s.seen=true;s.misses=0;}
-  else if(s.seen){s.misses++;if(s.misses>=3){sessions.delete(id);changed=true;if(consoleMode&&!keyboardOpen&&!win.isFocused()&&[...sessions.values()].every(x=>!x.seen))home();}}
-  else if(Date.now()-s.started>120000){sessions.delete(id);changed=true;}
+ for(const [id,s]of sessions){const e=entries.find(e=>e.id===id);if(!e){sessions.delete(id);continue;}
+  const foreground=e.kind==='game'?windows.find(w=>w.foreground&&matchWindow(e,w,s.before,s)):null;
+  const found=foreground||(s.window?windows.find(w=>w.window===s.window):null)||windows.find(w=>!s.before.has(w.window)&&matchWindow(e,w,s.before,s))||windows.find(w=>matchWindow(e,w,s.before,s));
+  if(found){
+   if(s.window!==found.window)changed=true;s.window=found.window;s.pid=found.pid;s.seen=true;s.misses=0;s.missingSince=0;
+   if(handoff?.id===id&&handoff.phase==='launching')void finishLaunch(id);
+  }else if(s.seen){
+   s.misses++;s.missingSince||=Date.now();
+   if(s.misses>=3&&!s.checking){
+    if(e.kind==='media'){endSession(id,s);changed=true;}
+    else{s.checking=true;void rpc('processAlive',{pid:s.pid}).then(alive=>{
+     if(sessions.get(id)===s&&s.misses>=3&&(!alive||Date.now()-s.missingSince>=15000)){endSession(id,s);updateSessions();publish();}
+    }).catch(err=>log(err.message)).finally(()=>{s.checking=false;});}
+   }
+  }else if(Date.now()-s.started>300000){sessions.delete(id);changed=true;}
  }
  const next=[...sessions].map(([id,s])=>({id,title:entries.find(e=>e.id===id)?.title||id,pid:s.pid||0,kind:entries.find(e=>e.id===id)?.kind||'game',window:s.window||''}));
  if(JSON.stringify(running)!==JSON.stringify(next)){running=next;changed=true;}if(changed)publish();
 }
+const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function finishLaunch(id){
+ if(handoff?.id!==id||handoff.phase!=='launching')return;
+ const epoch=presentationEpoch;clearHandoff();publish();
+ if(!consoleMode||overlayId)return;
+ win.hide();const e=entries.find(e=>e.id===id);await setMode(e?.kind==='media'?'browser':'game');
+ if(epoch===presentationEpoch&&consoleMode&&sessions.get(id)?.window)await rpc('focus',{window:sessions.get(id).window}).catch(err=>log(err.message));
+}
+async function resumeSession(id){
+ if(!consoleMode)return false;const openingEpoch=presentationEpoch;
+ const session=sessions.get(id);if(!session?.window)throw new Error('App window not found yet.');
+ if(ready){windows=await rpc('windows');updateSessions();}if(openingEpoch!==presentationEpoch||!consoleMode)return false;if(!windows.some(w=>w.window===session.window))throw new Error('Game window is changing or has closed. Try again in a moment.');
+ const epoch=++presentationEpoch;activeSessionId=id;handoff={id,phase:'resuming'};publish();
+ await pause(settings.reducedMotion?0:160);if(epoch!==presentationEpoch||!consoleMode)return false;
+ clearHandoff();overlayId=null;win.hide();win.setAlwaysOnTop(false);await setMode(entries.find(e=>e.id===id)?.kind==='media'?'browser':'game');
+ if(epoch!==presentationEpoch||!consoleMode)return false;
+ const focused=await rpc('focus',{window:session.window}).catch(()=>false);
+ if(!focused&&epoch===presentationEpoch){await home();emit({type:'notice',message:'Windows could not bring the app forward. Select it from the taskbar, then try again.'});}
+ publish();return focused;
+}
+async function systemMenu(){
+ if(!consoleMode)return home();
+ if(overlayId)return resumeSession(overlayId).catch(err=>{emit({type:'notice',message:err.message});});
+ const openingEpoch=presentationEpoch;if(ready){windows=await rpc('windows');updateSessions();}if(openingEpoch!==presentationEpoch||!consoleMode)return;
+ const foreground=windows.find(w=>w.foreground);const selected=[...sessions].find(([,s])=>s.window===foreground?.window)?.[0]||activeSessionId;
+ const session=sessions.get(selected);
+ if(!session?.window){if(win.isVisible()&&mode==='shell')emit({type:'input',action:'control'});else await home();return;}
+ activeSessionId=selected;overlayId=selected;keyboardOpen=false;clearHandoff();const epoch=++presentationEpoch;
+ const area=screen.getDisplayMatching(win.getBounds()).workArea;
+ const width=Math.round(Math.min(area.width-48,Math.max(1120,area.width*.65))),height=Math.round(Math.min(area.height-48,Math.max(380,area.height*.34)));
+ win.setFullScreen(false);win.setMinimumSize(600,280);win.setBounds({x:Math.round(area.x+(area.width-width)/2),y:area.y+area.height-height-24,width,height});
+ win.setAlwaysOnTop(true,'floating');await setMode('overlay');if(epoch!==presentationEpoch||!consoleMode||overlayId!==selected)return;publish();win.show();win.focus();emit({type:'overlay'});
+}
 function spawnDetached(file,args=[],options={}){return new Promise((resolve,reject)=>{const p=spawn(file,args,{detached:true,stdio:'ignore',windowsHide:false,...options});p.once('error',reject);p.once('spawn',()=>{p.unref();resolve(p.pid);});});}
 async function launch(id){
  const e=entries.find(e=>e.id===id);if(!e)throw new Error('Library entry no longer exists.');
- const existing=sessions.get(id);if(existing?.window&&windows.some(w=>w.window===existing.window)){await setMode(e.kind==='media'?'browser':'game');win.hide();await rpc('focus',{window:existing.window});return;}
+ const existing=sessions.get(id);if(existing?.window&&windows.some(w=>w.window===existing.window))return resumeSession(id);
+ if(handoff)throw new Error('Another app is still starting. Return home before launching again.');
+ const epoch=++presentationEpoch;consoleMode=true;overlayId=null;handoff={id,phase:'launching'};publish();await pause(settings.reducedMotion?0:180);if(epoch!==presentationEpoch||!consoleMode)return false;
+ let executable=e.launchType==='exe'?e.target:'';if(e.launchType==='shortcut')try{executable=shell.readShortcutLink(e.target).target;}catch{}
+ try{
  let pid=0;if(ready)windows=await rpc('windows');const before=new Set(windows.map(w=>w.window));
  if(e.launchType==='web'){
   const url=c.normalizeUrl(e.id==='media-jellyfin'?settings.jellyfin:e.target);await resolveBrowser();
@@ -109,12 +160,15 @@ async function launch(id){
  else if(e.launchType==='app'){if(!/^[\w.\-]+_[\w]+![\w.\-]+$/.test(e.target))throw new Error('Invalid Windows app ID.');pid=await spawnDetached('explorer.exe',['shell:AppsFolder\\'+e.target]);}
  else if(e.launchType==='shortcut'){if(!await c.exists(e.target))throw new Error('Shortcut missing. Edit or remove this tile.');const error=await shell.openPath(e.target);if(error)throw new Error(error);}
  else {if(!await c.exists(e.target))throw new Error('Game executable missing. Edit or reimport this tile.');if(!/\.exe$/i.test(e.target))throw new Error('Choose an .exe game file.');pid=await spawnDetached(e.target,e.args||[],{cwd:e.cwd||path.dirname(e.target)});}
- sessions.set(id,{started:Date.now(),before,pid,window:'',seen:false,misses:0});e.lastPlayed=Date.now();await save();await setMode(e.kind==='media'?'browser':'game');emit({type:'launched',data:{title:e.title,kind:e.kind}});win.hide();updateSessions();publish();
+ sessions.set(id,{started:Date.now(),before,pid,executable,window:'',seen:false,misses:0});activeSessionId=id;e.lastPlayed=Date.now();await save();
+ if(epoch===presentationEpoch&&consoleMode){await setMode('launching');handoffTimer=setTimeout(()=>{if(handoff?.id===id&&epoch===presentationEpoch){handoff={id,phase:'launching',waiting:true};publish();}},12000);handoffTimer.unref();}
+ emit({type:'launched',data:{title:e.title,kind:e.kind}});updateSessions();publish();
+ }catch(err){if(epoch===presentationEpoch){clearHandoff();await home();}throw err;}
 }
-async function home(){consoleMode=true;keyboardOpen=false;win.setAlwaysOnTop(false);win.setMinimumSize(800,500);const bounds=screen.getPrimaryDisplay().bounds;win.setBounds(bounds);win.setFullScreen(!TEST);if(TEST)win.setBounds({x:40,y:40,width:1280,height:720});win.show();win.focus();await setMode('shell');emit({type:'home'});publish();}
-async function desktop(){keyboardOpen=false;consoleMode=false;await setMode('desktop');win.setAlwaysOnTop(false);emit({type:'desktop'});win.hide();if(ready)await rpc('desktop');publish();}
-async function openKeyboard(){if(!consoleMode)return;if(!ready)return;const browserWindow=[...running].reverse().find(r=>r.kind==='media'&&r.window)?.window||'';const target=await rpc('keyboardPrepare',{window:browserWindow}).catch(()=>false);if(!target){emit({type:'notice',message:'Open a browser or media tile first, then press Ctrl + Alt + K.'});return;}keyboardOpen=true;keyboardBounds=screen.getPrimaryDisplay().workArea;win.setFullScreen(false);win.setMinimumSize(600,280);win.setBounds({x:keyboardBounds.x+Math.round((keyboardBounds.width-Math.min(1100,keyboardBounds.width))/2),y:keyboardBounds.y+keyboardBounds.height-Math.min(470,Math.round(keyboardBounds.height*.55)),width:Math.min(1100,keyboardBounds.width),height:Math.min(470,Math.round(keyboardBounds.height*.55))});win.setAlwaysOnTop(true,'floating');win.show();win.focus();await setMode('keyboard');emit({type:'keyboard',data:{open:true}});publish();}
-async function closeKeyboard(){keyboardOpen=false;emit({type:'keyboard',data:{open:false}});win.hide();win.setAlwaysOnTop(false);await setMode('browser');}
+async function home(){++presentationEpoch;clearHandoff();overlayId=null;consoleMode=true;keyboardOpen=false;win.setAlwaysOnTop(false);win.setMinimumSize(800,500);const bounds=screen.getPrimaryDisplay().bounds;win.setBounds(bounds);win.setFullScreen(!TEST);if(TEST)win.setBounds({x:40,y:40,width:1280,height:720});win.show();win.focus();await setMode('shell');emit({type:'home',data:{entryId:activeSessionId}});publish();}
+async function desktop(){const epoch=++presentationEpoch;clearHandoff();overlayId=null;keyboardOpen=false;consoleMode=false;win.setAlwaysOnTop(false);emit({type:'desktop'});win.hide();await setMode('desktop');if(ready&&epoch===presentationEpoch&&!consoleMode)await rpc('desktop');publish();}
+async function openKeyboard(){if(!consoleMode)return;if(!ready)return;const openingEpoch=++presentationEpoch;const browserWindow=[...running].reverse().find(r=>r.kind==='media'&&r.window)?.window||'';const target=await rpc('keyboardPrepare',{window:browserWindow}).catch(()=>false);if(openingEpoch!==presentationEpoch||!consoleMode)return;if(!target){emit({type:'notice',message:'Open a browser or media tile first, then press Ctrl + Alt + K.'});return;}overlayId=null;clearHandoff();keyboardOpen=true;keyboardBounds=screen.getPrimaryDisplay().workArea;win.setFullScreen(false);win.setMinimumSize(600,280);win.setBounds({x:keyboardBounds.x+Math.round((keyboardBounds.width-Math.min(1100,keyboardBounds.width))/2),y:keyboardBounds.y+keyboardBounds.height-Math.min(470,Math.round(keyboardBounds.height*.55)),width:Math.min(1100,keyboardBounds.width),height:Math.min(470,Math.round(keyboardBounds.height*.55))});win.setAlwaysOnTop(true,'floating');win.show();win.focus();await setMode('keyboard');if(openingEpoch!==presentationEpoch||!consoleMode)return;emit({type:'keyboard',data:{open:true}});publish();}
+async function closeKeyboard(){if(!consoleMode){keyboardOpen=false;win.setAlwaysOnTop(false);return false;}keyboardOpen=false;emit({type:'keyboard',data:{open:false}});win.hide();win.setAlwaysOnTop(false);await setMode('browser');}
 function ensureObject(d){if(!d||typeof d!=='object'||Array.isArray(d))throw new Error('Invalid request.');return d;}
 async function command(op,data){
  switch(op){
@@ -130,13 +184,13 @@ async function command(op,data){
  case 'add':{const d=ensureObject(data);const title=String(d.title||'').trim().slice(0,160);if(!title)throw new Error('Enter a title.');let e;if(d.kind==='media'){const target=c.normalizeUrl(String(d.target));e={id:d.id&&entries.some(x=>x.id===d.id)?d.id:'custom-'+c.idFor(target),title,source:'Custom service',kind:'media',target,launchType:'web'};}else{const target=path.resolve(String(d.target||''));if(!/\.(exe|lnk)$/i.test(target)||!await c.exists(target))throw new Error('Choose an existing .exe or .lnk.');e={id:d.id&&entries.some(x=>x.id===d.id)?d.id:'local-'+c.idFor(target),title,source:'Standalone',kind:'game',target,args:splitArguments(String(d.args||'')),cwd:d.cwd?path.resolve(String(d.cwd)):path.dirname(target),launchType:/\.lnk$/i.test(target)?'shortcut':'exe'};}hiddenIds.delete(e.id);entries=c.mergeEntries(entries,[e]);await hydrateArt(entries.filter(x=>x.id===e.id));await save();publish();return true;}
  case 'artwork':{const d=ensureObject(data),e=entries.find(e=>e.id===d.id);if(!e)throw new Error('Tile missing.');const result=await dialog.showOpenDialog(win,{title:d.backdrop?'Choose background':'Choose cover art',properties:['openFile'],filters:[{name:'Images',extensions:['jpg','jpeg','png','webp']}]});if(result.canceled)return false;await fs.mkdir(path.join(userDir(),'artwork'),{recursive:true});const target=path.join(userDir(),'artwork',e.id+(d.backdrop?'-backdrop':'-cover')+'-'+Date.now()+path.extname(result.filePaths[0]).toLowerCase());await fs.copyFile(result.filePaths[0],target);e[d.backdrop?'backdrop':'artwork']=target;e[d.backdrop?'customBackdrop':'customArtwork']=true;if(!d.backdrop)e.iconArtwork=false;await save();publish();return true;}
  case 'settings':{const d=ensureObject(data);if(typeof d.profile==='string')settings.profile=d.profile.trim().slice(0,40)||'Player';for(const k of ['startup','reducedMotion','onboarded'])if(typeof d[k]==='boolean')settings[k]=d[k];if(typeof d.sounds==='number')settings.sounds=Math.max(0,Math.min(1,d.sounds));if(typeof d.uiScale==='number')settings.uiScale=Math.max(.8,Math.min(1.3,d.uiScale));if(typeof d.jellyfin==='string'){settings.jellyfin=c.normalizeUrl(d.jellyfin);const e=entries.find(e=>e.id==='media-jellyfin');if(e)e.target=settings.jellyfin;}if(Array.isArray(d.folders))settings.folders=[...new Set(d.folders.filter(x=>typeof x==='string'&&path.isAbsolute(x)))].slice(0,20);if(typeof d.browser==='string'){if(d.browser&&!/\.exe$/i.test(d.browser))throw new Error('Browser must be an executable.');settings.browser=d.browser;await resolveBrowser();}if(app.isPackaged&&!TEST)app.setLoginItemSettings({openAtLogin:settings.startup,name:'PSS Console',path:process.env.PORTABLE_EXECUTABLE_FILE||process.execPath,args:['--startup']});await save();publish();return true;}
- case 'desktop':return desktop();case 'home':return home();case 'quit':quitting=true;app.quit();return true;
+ case 'handoffYield':if(handoff?.phase==='launching')return finishLaunch(handoff.id);return false;case 'controlOverlay':return systemMenu();case 'desktop':return desktop();case 'home':return home();case 'quit':quitting=true;app.quit();return true;
  case 'volume':if(!['up','down','mute'].includes(data))throw new Error('Invalid volume action.');return rpc('volume',{action:data});
  case 'keyboard':return openKeyboard();
  case 'keyboardClose':return closeKeyboard();
  case 'keyboardSend':{const d=ensureObject(data);if(!keyboardOpen)throw new Error('Open browser keyboard first.');await rpc('text',{text:String(d.text||'').slice(0,4096)});if(d.enter)await rpc('key',{key:'enter'});return closeKeyboard();}
- case 'runningFocus':{const s=sessions.get(data);if(!s?.window)throw new Error('App window not found yet.');await setMode(entries.find(e=>e.id===data)?.kind==='media'?'browser':'game');win.hide();return rpc('focus',{window:s.window});}
- case 'runningClose':{const s=sessions.get(data);if(!s?.window)throw new Error('App window not found.');return rpc('close',{window:s.window});}
+ case 'runningFocus':return resumeSession(data);
+ case 'runningClose':{const s=sessions.get(data);if(!s?.window)throw new Error('App window not found.');const closed=await rpc('close',{window:s.window});if(!closed)throw new Error('Windows could not request an app exit. Close it from inside the game or app.');return true;}
  case 'power':{if(!['sleep','restart','shutdown'].includes(data))throw new Error('Unknown power action.');if(TEST)throw new Error('Power disabled during tests.');if(data==='sleep'){await desktop();return rpc('sleep');}return spawnDetached('shutdown.exe',[data==='restart'?'/r':'/s','/t','0']);}
  default:throw new Error('Unknown command.');
  }
@@ -152,10 +206,10 @@ if(!app.requestSingleInstanceLock())app.quit();else{
   win.on('close',event=>{if(!quitting){event.preventDefault();desktop();}});win.on('focus',()=>{if(consoleMode&&!keyboardOpen&&mode==='shell')setMode('shell');});
   ipcMain.handle('pss:command',async(event,op,data)=>{if(event.sender!==win.webContents||event.senderFrame!==win.webContents.mainFrame)throw new Error('Untrusted sender.');try{return await command(op,data);}catch(e){log(op+': '+e.message);throw e;}});
   const icon=nativeImage.createFromPath(path.join(__dirname,'..','assets','tray.png'));tray=new Tray(icon.isEmpty()?nativeImage.createEmpty():icon);tray.setToolTip('PSS Console');tray.setContextMenu(Menu.buildFromTemplate([{label:'Open console',click:()=>home()},{label:'Return to Windows',click:()=>desktop()},{type:'separator'},{label:'Quit PSS Console',click:()=>{quitting=true;app.quit();}}]));tray.on('double-click',()=>home());
-  if(!TEST){globalShortcut.register('CommandOrControl+Alt+Home',()=>home());globalShortcut.register('CommandOrControl+Alt+D',()=>desktop());globalShortcut.register('CommandOrControl+Alt+K',()=>openKeyboard());}
+  if(!TEST){globalShortcut.register('CommandOrControl+Alt+Home',()=>systemMenu().catch(err=>log(err.message)));globalShortcut.register('CommandOrControl+Alt+D',()=>desktop());globalShortcut.register('CommandOrControl+Alt+K',()=>openKeyboard());}
   if(process.env.PSS_DEV_URL)await win.loadURL(process.env.PSS_DEV_URL);else await win.loadFile(path.join(__dirname,'..','dist','index.html'));
   win.show();startHelper();initial().catch(e=>{discovering=false;warnings.push(e.message);publish();log(e.stack||e.message);});
  });
- app.on('before-quit',()=>{quitting=true;globalShortcut.unregisterAll();if(helper&&!helper.killed){helper.stdin.end();setTimeout(()=>helper?.kill(),1200).unref();}tray?.destroy();});
+ app.on('before-quit',()=>{quitting=true;clearHandoff();globalShortcut.unregisterAll();if(helper&&!helper.killed){helper.stdin.end();setTimeout(()=>helper?.kill(),1200).unref();}tray?.destroy();});
  app.on('window-all-closed',()=>{if(quitting)app.quit();});
 }
