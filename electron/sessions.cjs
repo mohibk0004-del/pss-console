@@ -10,4 +10,11 @@ function matchesGame(entry,window,session={}){
  if(executable&&path.win32.basename(executable,'.exe').toLowerCase()===window.process.toLowerCase())return true;
  const title=normalize(entry.title);return title.length>=3&&normalize(window.title).includes(title);
 }
-module.exports={matchesGame};
+function readyWindow(window){return window.className!=='#32770'&&!window.minimized&&!window.cloaked&&!window.toolWindow&&(!window.owner||window.owner==='0')&&window.bounds?.width>=320&&window.bounds?.height>=180;}
+function windowScore(entry,window,session={}){
+ if(!matchesGame(entry,window,session))return 0;
+ const executable=session.executable||(entry.launchType==='exe'?entry.target:'');
+ if(executable&&path.win32.basename(executable,'.exe').toLowerCase()===window.process.toLowerCase())return 3;
+ return session.pid===window.pid?2:1;
+}
+module.exports={matchesGame,readyWindow,windowScore};

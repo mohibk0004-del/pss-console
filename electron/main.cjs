@@ -1,6 +1,6 @@
 const {app,BrowserWindow,ipcMain,dialog,Tray,Menu,nativeImage,globalShortcut,shell,protocol,net,screen}=require('electron');
 const fs=require('node:fs/promises');const path=require('node:path');const {spawn}=require('node:child_process');const readline=require('node:readline');const {pathToFileURL}=require('node:url');
-const {matchesGame}=require('./sessions.cjs');const c=require('./catalog.cjs');const {websiteIcon}=require('./icons.cjs');const {discover,splitArguments}=require('./discovery.cjs');
+const {matchesGame,readyWindow,windowScore}=require('./sessions.cjs');const c=require('./catalog.cjs');const {websiteIcon}=require('./icons.cjs');const {discover,splitArguments}=require('./discovery.cjs');
 const TEST=process.argv.includes('--smoke');
 const dataFlag=process.argv.find(x=>x.startsWith('--data-dir='));if(dataFlag)app.setPath('userData',dataFlag.slice(11));
 protocol.registerSchemesAsPrivileged([{scheme:'pss-asset',privileges:{standard:true,secure:true,supportFetchAPI:true}}]);
@@ -83,7 +83,7 @@ function matchWindow(entry,w,before,session){
  if(entry.kind==='media')return path.basename(browser||'brave.exe','.exe').toLowerCase()===w.process.toLowerCase()&&!before.has(w.window);
  return matchesGame(entry,w,session);
 }
-function clearHandoff(){if(handoffTimer)clearTimeout(handoffTimer);handoffTimer=null;handoff=null;}
+function clearHandoff(){if(handoffTimer)clearTimeout(handoffTimer);handoffTimer=null;if(handoff?.token&&ready)void rpc('cancelActivation',{token:handoff.token}).catch(()=>{});handoff=null;}
 function endSession(id,s){
  if(sessions.get(id)!==s)return;sessions.delete(id);
  if(consoleMode&&!keyboardOpen&&activeSessionId===id&&(mode==='game'||mode==='browser'||overlayId===id||handoff?.id===id))void home();
@@ -91,12 +91,18 @@ function endSession(id,s){
 function updateSessions(){
  let changed=false;
  for(const [id,s]of sessions){const e=entries.find(e=>e.id===id);if(!e){sessions.delete(id);continue;}
-  const foreground=e.kind==='game'?windows.find(w=>w.foreground&&matchWindow(e,w,s.before,s)):null;
-  const found=foreground||(s.window?windows.find(w=>w.window===s.window):null)||windows.find(w=>!s.before.has(w.window)&&matchWindow(e,w,s.before,s))||windows.find(w=>matchWindow(e,w,s.before,s));
+  const gameCandidates=e.kind==='game'?windows.filter(w=>matchWindow(e,w,s.before,s)).sort((a,b)=>windowScore(e,b,s)-windowScore(e,a,s)||Number(readyWindow(b))-Number(readyWindow(a))||Number(b.foreground)-Number(a.foreground)):[];
+  const attention=gameCandidates.find(w=>/\b(?:system error|application error|fatal error)\b/i.test(w.title)||(w.className==='#32770'&&w.foreground));
+  if(attention&&e.id!=='riot-valorant'&&activeSessionId===id&&consoleMode&&(handoff?.id===id||mode==='game')&&!handoff?.failed)void gameAttention(id,attention);
+  const found=e.kind==='game'?gameCandidates[0]:(s.window?windows.find(w=>w.window===s.window):null)||windows.find(w=>matchWindow(e,w,s.before,s));
   if(found){
    if(s.window!==found.window)changed=true;s.window=found.window;s.pid=found.pid;s.seen=true;s.misses=0;s.missingSince=0;
-   if(handoff?.id===id&&handoff.phase==='launching')void finishLaunch(id);
+   if(handoff?.id===id&&handoff.phase==='launching'&&!handoff.failed&&!handoff.busy){
+    const now=Date.now();if(s.candidate!==found.window){s.candidate=found.window;s.candidateSince=now;}
+    if(e.id==='riot-valorant'||(readyWindow(found)&&now-s.candidateSince>=400))void finishLaunch(id);
+   }
   }else if(s.seen){
+   s.candidate='';
    s.misses++;s.missingSince||=Date.now();
    if(s.misses>=3&&!s.checking){
     if(e.kind==='media'){endSession(id,s);changed=true;}
@@ -110,12 +116,67 @@ function updateSessions(){
  if(JSON.stringify(running)!==JSON.stringify(next)){running=next;changed=true;}if(changed)publish();
 }
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function gameAttention(id,dialog){
+ if(handoff?.recovering)return;
+ if(!handoff)handoff={id,phase:'launching'};
+ const flow=handoff,epoch=presentationEpoch;flow.recovering=true;flow.failed=true;flow.busy=false;
+ if(handoffTimer)clearTimeout(handoffTimer);handoffTimer=null;
+ if(flow.token)void rpc('cancelActivation',{token:flow.token}).catch(()=>{});
+ prepareGameScreen();publish();
+ const detail=await rpc('windowText',{window:dialog.window}).catch(()=>dialog.title);
+ if(epoch!==presentationEpoch||!consoleMode||handoff!==flow)return;
+ flow.detail=detail||dialog.title;flow.waiting=true;await setMode('launching');publish();void log('handoff attention '+JSON.stringify({id,title:dialog.title,detail:flow.detail}));
+}
 async function finishLaunch(id){
  if(handoff?.id!==id||handoff.phase!=='launching')return;
+ const e=entries.find(e=>e.id===id);
+ if(e?.kind==='game'&&e.id!=='riot-valorant')return transferGame(id);
  const epoch=presentationEpoch;clearHandoff();publish();
  if(!consoleMode||overlayId)return;
- win.hide();const e=entries.find(e=>e.id===id);await setMode(e?.kind==='media'?'browser':'game');
+ win.hide();await setMode(e?.kind==='media'?'browser':'game');
  if(epoch===presentationEpoch&&consoleMode&&sessions.get(id)?.window)await rpc('focus',{window:sessions.get(id).window}).catch(err=>log(err.message));
+}
+function prepareGameScreen(){win.setAlwaysOnTop(false);win.setMinimumSize(800,500);win.setBounds(screen.getPrimaryDisplay().bounds);win.setFullScreen(!TEST);if(TEST)win.setBounds({x:40,y:40,width:1280,height:720});win.showInactive();}
+async function transferGame(id){
+ if(!handoff||handoff.busy)return false;
+ const flow=handoff,epoch=presentationEpoch,session=sessions.get(id),entry=entries.find(e=>e.id===id);
+ if(!session||!entry)return false;
+ flow.busy=true;flow.failed=false;flow.token=String(epoch);overlayId=null;publish();prepareGameScreen();await setMode('launching');
+ const valid=()=>!quitting&&consoleMode&&epoch===presentationEpoch&&handoff===flow&&!flow.recovering;
+ if(!valid())return false;
+ if(flow.phase==='resuming'&&windows.some(w=>w.window===session.window&&w.minimized))await rpc('restore',{window:session.window}).catch(()=>false);
+ const deadline=Date.now()+5000;let stableWindow='',stableSince=0;
+ while(valid()&&Date.now()<deadline){
+  windows=await rpc('windows',{},1000).catch(()=>[]);if(!valid())return false;
+  const candidates=windows.filter(w=>readyWindow(w)&&matchWindow(entry,w,session.before,session)).sort((a,b)=>windowScore(entry,b,session)-windowScore(entry,a,session));
+  const candidate=candidates[0];
+  if(!candidate){stableWindow='';await pause(200);continue;}
+  if(stableWindow!==candidate.window){stableWindow=candidate.window;stableSince=Date.now();await pause(400);continue;}
+  if(Date.now()-stableSince<400){await pause(100);continue;}
+  session.window=candidate.window;session.pid=candidate.pid;
+  void log('handoff candidate '+JSON.stringify({id,window:candidate.window,pid:candidate.pid,process:candidate.process,ready:true,elapsed:Date.now()-session.started}));
+  const result=await rpc('activate',{window:candidate.window,token:flow.token,timeoutMs:Math.max(1,Math.min(2000,deadline-Date.now()))},3000).catch(()=>({focused:false}));
+  if(!valid())return false;
+  if(result.focused){
+   // Keep artwork behind the game while its first window settles or is replaced.
+   let settled=true;const settleUntil=Math.min(deadline,Date.now()+1200);
+   while(valid()&&Date.now()<settleUntil){await pause(200);if(!valid())return false;windows=await rpc('windows',{},1000).catch(()=>[]);if(!valid())return false;if(!windows.some(w=>w.window===candidate.window&&w.foreground&&readyWindow(w))){settled=false;break;}}
+   if(settled&&valid()){
+    void log('handoff focused '+JSON.stringify({id,window:candidate.window,elapsed:Date.now()-session.started}));
+    if(flow.phase==='launching'&&!flow.covered){
+     flow.covered=true;if(handoffTimer)clearTimeout(handoffTimer);handoffTimer=setTimeout(async()=>{
+      const latest=await rpc('windows',{},1000).catch(()=>[]);if(!valid())return;
+      if(latest.some(w=>w.foreground&&readyWindow(w)&&matchWindow(entry,w,session.before,session))){clearHandoff();win.hide();publish();}
+      else{flow.busy=false;void transferGame(id);}
+     },8000);handoffTimer.unref();await setMode('game');publish();return true;
+    }
+    clearHandoff();overlayId=null;win.hide();await setMode('game');publish();return true;
+   }
+  }
+  void log('handoff activation not settled '+id);await pause(200);
+ }
+ if(valid()){flow.busy=false;flow.failed=true;flow.waiting=true;win.show();win.focus();publish();void log('handoff recovery '+id);}
+ return false;
 }
 async function resumeSession(id){
  if(!consoleMode)return false;const openingEpoch=presentationEpoch;
@@ -123,6 +184,7 @@ async function resumeSession(id){
  if(ready){windows=await rpc('windows');updateSessions();}if(openingEpoch!==presentationEpoch||!consoleMode)return false;if(!windows.some(w=>w.window===session.window))throw new Error('Game window is changing or has closed. Try again in a moment.');
  const epoch=++presentationEpoch;activeSessionId=id;handoff={id,phase:'resuming'};publish();
  await pause(settings.reducedMotion?0:160);if(epoch!==presentationEpoch||!consoleMode)return false;
+ if(entries.find(e=>e.id===id)?.kind==='game'&&id!=='riot-valorant')return transferGame(id);
  clearHandoff();overlayId=null;win.hide();win.setAlwaysOnTop(false);await setMode(entries.find(e=>e.id===id)?.kind==='media'?'browser':'game');
  if(epoch!==presentationEpoch||!consoleMode)return false;
  const focused=await rpc('focus',{window:session.window}).catch(()=>false);
@@ -161,7 +223,7 @@ async function launch(id){
  else if(e.launchType==='shortcut'){if(!await c.exists(e.target))throw new Error('Shortcut missing. Edit or remove this tile.');const error=await shell.openPath(e.target);if(error)throw new Error(error);}
  else {if(!await c.exists(e.target))throw new Error('Game executable missing. Edit or reimport this tile.');if(!/\.exe$/i.test(e.target))throw new Error('Choose an .exe game file.');pid=await spawnDetached(e.target,e.args||[],{cwd:e.cwd||path.dirname(e.target)});}
  sessions.set(id,{started:Date.now(),before,pid,executable,window:'',seen:false,misses:0});activeSessionId=id;e.lastPlayed=Date.now();await save();
- if(epoch===presentationEpoch&&consoleMode){await setMode('launching');handoffTimer=setTimeout(()=>{if(handoff?.id===id&&epoch===presentationEpoch){handoff={id,phase:'launching',waiting:true};publish();}},12000);handoffTimer.unref();}
+ if(epoch===presentationEpoch&&consoleMode){await setMode('launching');handoffTimer=setTimeout(()=>{if(handoff?.id===id&&epoch===presentationEpoch){handoff.waiting=true;publish();}},12000);handoffTimer.unref();}
  emit({type:'launched',data:{title:e.title,kind:e.kind}});updateSessions();publish();
  }catch(err){if(epoch===presentationEpoch){clearHandoff();await home();}throw err;}
 }
@@ -184,7 +246,8 @@ async function command(op,data){
  case 'add':{const d=ensureObject(data);const title=String(d.title||'').trim().slice(0,160);if(!title)throw new Error('Enter a title.');let e;if(d.kind==='media'){const target=c.normalizeUrl(String(d.target));e={id:d.id&&entries.some(x=>x.id===d.id)?d.id:'custom-'+c.idFor(target),title,source:'Custom service',kind:'media',target,launchType:'web'};}else{const target=path.resolve(String(d.target||''));if(!/\.(exe|lnk)$/i.test(target)||!await c.exists(target))throw new Error('Choose an existing .exe or .lnk.');e={id:d.id&&entries.some(x=>x.id===d.id)?d.id:'local-'+c.idFor(target),title,source:'Standalone',kind:'game',target,args:splitArguments(String(d.args||'')),cwd:d.cwd?path.resolve(String(d.cwd)):path.dirname(target),launchType:/\.lnk$/i.test(target)?'shortcut':'exe'};}hiddenIds.delete(e.id);entries=c.mergeEntries(entries,[e]);await hydrateArt(entries.filter(x=>x.id===e.id));await save();publish();return true;}
  case 'artwork':{const d=ensureObject(data),e=entries.find(e=>e.id===d.id);if(!e)throw new Error('Tile missing.');const result=await dialog.showOpenDialog(win,{title:d.backdrop?'Choose background':'Choose cover art',properties:['openFile'],filters:[{name:'Images',extensions:['jpg','jpeg','png','webp']}]});if(result.canceled)return false;await fs.mkdir(path.join(userDir(),'artwork'),{recursive:true});const target=path.join(userDir(),'artwork',e.id+(d.backdrop?'-backdrop':'-cover')+'-'+Date.now()+path.extname(result.filePaths[0]).toLowerCase());await fs.copyFile(result.filePaths[0],target);e[d.backdrop?'backdrop':'artwork']=target;e[d.backdrop?'customBackdrop':'customArtwork']=true;if(!d.backdrop)e.iconArtwork=false;await save();publish();return true;}
  case 'settings':{const d=ensureObject(data);if(typeof d.profile==='string')settings.profile=d.profile.trim().slice(0,40)||'Player';for(const k of ['startup','reducedMotion','onboarded'])if(typeof d[k]==='boolean')settings[k]=d[k];if(typeof d.sounds==='number')settings.sounds=Math.max(0,Math.min(1,d.sounds));if(typeof d.uiScale==='number')settings.uiScale=Math.max(.8,Math.min(1.3,d.uiScale));if(typeof d.jellyfin==='string'){settings.jellyfin=c.normalizeUrl(d.jellyfin);const e=entries.find(e=>e.id==='media-jellyfin');if(e)e.target=settings.jellyfin;}if(Array.isArray(d.folders))settings.folders=[...new Set(d.folders.filter(x=>typeof x==='string'&&path.isAbsolute(x)))].slice(0,20);if(typeof d.browser==='string'){if(d.browser&&!/\.exe$/i.test(d.browser))throw new Error('Browser must be an executable.');settings.browser=d.browser;await resolveBrowser();}if(app.isPackaged&&!TEST)app.setLoginItemSettings({openAtLogin:settings.startup,name:'PSS Console',path:process.env.PORTABLE_EXECUTABLE_FILE||process.execPath,args:['--startup']});await save();publish();return true;}
- case 'handoffYield':if(handoff?.phase==='launching')return finishLaunch(handoff.id);return false;case 'controlOverlay':return systemMenu();case 'desktop':return desktop();case 'home':return home();case 'quit':quitting=true;app.quit();return true;
+ case 'handoffRetry':if(handoff&&!handoff.busy){handoff.failed=false;handoff.recovering=false;handoff.detail='';return transferGame(handoff.id);}return false;
+ case 'handoffYield':if(handoff){const entry=entries.find(e=>e.id===handoff.id),session=sessions.get(handoff.id);const epoch=++presentationEpoch;clearHandoff();overlayId=null;win.setAlwaysOnTop(false);win.hide();await setMode(entry?.kind==='media'?'browser':'game');if(epoch===presentationEpoch&&consoleMode&&session?.window)await rpc('focus',{window:session.window}).catch(()=>false);return true;}return false;case 'controlOverlay':return systemMenu();case 'desktop':return desktop();case 'home':return home();case 'quit':quitting=true;app.quit();return true;
  case 'volume':if(!['up','down','mute'].includes(data))throw new Error('Invalid volume action.');return rpc('volume',{action:data});
  case 'keyboard':return openKeyboard();
  case 'keyboardClose':return closeKeyboard();

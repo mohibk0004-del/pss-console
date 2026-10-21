@@ -76,7 +76,7 @@ function App(){
  const labelTab=tab==='game'?'Games':'Media';
  const flowEntry=state.entries.find(e=>e.id===(state.overlayId||state.handoff?.id));
  if(state.overlayId&&flowEntry)return <GameOverlay key={state.overlayId} entry={flowEntry} artwork={<ServiceMark entry={flowEntry}/>} resuming={state.handoff?.phase==='resuming'} notice={notice} action={run}/>;
- if(state.handoff&&flowEntry)return <LaunchScreen entry={flowEntry} phase={state.handoff.phase} waiting={state.handoff.waiting} artwork={<ServiceMark entry={flowEntry}/>} action={run}/>;
+ if(state.handoff&&flowEntry)return <LaunchScreen entry={flowEntry} phase={state.handoff.phase} waiting={state.handoff.waiting} failed={state.handoff.failed} detail={state.handoff.detail} artwork={<ServiceMark entry={flowEntry}/>} action={run}/>;
  if(keyboardOnly)return <main className="keyboard-only"><OnscreenKeyboard browser onClose={()=>void run('keyboardClose')} onSubmit={(text,enter)=>void run('keyboardSend',{text,enter})}/>{notice&&<div className="toast error" role="alert"><AlertCircle/>{notice}</div>}</main>;
  return <main className="console-shell" style={{'--entry-color':entry?.color||'#293e60'} as React.CSSProperties}>
   <div className="ambient" aria-hidden="true"/>

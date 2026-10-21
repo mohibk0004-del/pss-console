@@ -4,7 +4,7 @@ A fullscreen PS5-style Games/Media launcher for Windows 11. Version 1.2 adds gam
 
 ## Run
 
-Use `PSS-Console-Setup-1.2.0-x64.exe` for a per-user installation and desktop shortcut. Opening the installed app enables startup after Windows sign-in by default. Change this under Settings → Launch at sign-in. The portable ZIP is also available; extract it completely before running PSS Console.exe. Retain it at a stable location if startup is enabled.
+Use `PSS-Console-Setup-1.2.1-x64.exe` for a per-user installation and desktop shortcut. Opening the installed app enables startup after Windows sign-in by default. Change this under Settings → Launch at sign-in. The portable ZIP is also available; extract it completely before running PSS Console.exe. Retain it at a stable location if startup is enabled.
 
 **Return to Windows:** select Windows in the footer/control center, or press **Ctrl + Alt + D**. Your games/apps remain open. Controller mouse mappings stop. Reopen PSS from its tray icon, desktop shortcut, or **Ctrl + Alt + Home**. The control center also offers Quit PSS Console, which exits the launcher/helper completely.
 
@@ -96,6 +96,10 @@ The public source repository excludes the SST font files and PS5 sound recording
 There are no constantly animated particles, videos, canvas effects, full-screen blur filters, or animated layout properties. Focus uses a 130 ms transform; backdrops use a 200 ms opacity fade. Clock updates pause while hidden. Helper polling backs off on the desktop and without a controller.
 
 ## Game sessions
+
+For native games other than Valorant, launch artwork stays visible until a ready game window is stable and foreground activation is verified. Splash/tool, owned, cloaked, minimized, and empty windows cannot complete handoff. PSS covers the background while the first game window settles; Resume restores minimized games and uses the same focus verification. Failed handoffs offer Retry, Show game or launcher, and Return home. Returning to Windows cancels pending activation. No screen capture or rendering layer runs during gameplay. Authentication prompts and exclusive-fullscreen display transitions can still require interaction.
+
+After initial activation, artwork stays behind the game for an eight-second startup grace period, then PSS hides. A replacement window gets one further verified handoff if needed. Native game error dialogs show their actual message in the recovery screen; PSS leaves the original dialog actionable. Fixing a missing/outdated game runtime remains the game's installation responsibility.
 
 Launch shows a short artwork transition while the game or its launcher opens. PSS stays running in the background. Games use their own fullscreen/borderless setting. Press Ctrl + Alt + Home, the controller Guide button (when Windows exposes it), or hold Options + Create / Menu + View for one second to open the compact control center. Resume returns to the same app without relaunching; Home opens the full library, where the game shows Resume Game. Close game asks for confirmation and sends a normal close request, allowing the game to show its own save/exit dialog.
 

@@ -2,7 +2,7 @@ export type Entry = { id: string; title: string; source: string; kind: 'game'|'m
 export type Settings = { startup: boolean; reducedMotion: boolean; sounds: number; profile: string; jellyfin: string; folders: string[]; browser: string; uiScale: number; onboarded: boolean };
 export type Controller = { connected: boolean; name: string; family: 'playstation'|'xbox'; count: number };
 export type RunningApp = { id: string; title: string; pid: number; kind: string; window: string };
-export type State = { entries: Entry[]; settings: Settings; controller: Controller; running: RunningApp[]; helper: boolean; version: string; mode: string; browser: string; warnings: string[]; overlayId?: string|null; handoff?: {id:string;phase:'launching'|'resuming';waiting?:boolean}|null };
+export type State = { entries: Entry[]; settings: Settings; controller: Controller; running: RunningApp[]; helper: boolean; version: string; mode: string; browser: string; warnings: string[]; overlayId?: string|null; handoff?: {id:string;phase:'launching'|'resuming';waiting?:boolean;failed?:boolean;detail?:string}|null };
 export type ScanResult = { entries: Entry[]; candidates: Entry[]; warnings: string[] };
 export type Event = { type: string; action?: string; state?: State; data?: any; message?: string };
 export interface Bridge { invoke<T=any>(command: string, data?: unknown): Promise<T>; onEvent(handler: (event: Event)=>void): ()=>void }

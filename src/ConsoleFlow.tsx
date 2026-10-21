@@ -3,10 +3,10 @@ import {Play,Home,Monitor,Volume2,VolumeX,X,Gamepad2} from 'lucide-react';
 import type {Entry} from './types';
 
 type Action=(command:string,data?:unknown)=>Promise<unknown>;
-export function LaunchScreen({entry,phase,waiting,artwork,action}:{entry:Entry;phase:string;waiting?:boolean;artwork:ReactNode;action:Action}){
+export function LaunchScreen({entry,phase,waiting,failed,detail,artwork,action}:{entry:Entry;phase:string;waiting?:boolean;failed?:boolean;detail?:string;artwork:ReactNode;action:Action}){
  return <main className="handoff-screen" aria-label="Game transition" style={entry.backdrop?{backgroundImage:`linear-gradient(#1111149c,#111114ed),url("${entry.backdrop}")`}:undefined}>
-  <div className="handoff-content"><div className="handoff-cover">{artwork}</div><p className="handoff-status" role="status">{phase==='resuming'?'Returning to your game':waiting?'Still starting':'Starting your '+(entry.kind==='game'?'game':'app')}</p><h1>{entry.title}</h1><p className="handoff-caption">{phase==='resuming'?'Pick up where you left off.':waiting?'Your launcher may need you to sign in. Check it, or return home.':'Your game or launcher will open shortly.'}</p></div>
-  <div className="handoff-actions">{phase==='launching'&&<button className="secondary-button" autoFocus onClick={()=>void action('handoffYield')}>Show game or launcher</button>}<button className="text-button" onClick={()=>void action('home')}><Home size={18}/>Return home</button></div>
+  <div className="handoff-content"><div className="handoff-cover">{artwork}</div><p className="handoff-status" role="status">{failed?'Game needs attention':phase==='resuming'?'Returning to your game':waiting?'Still starting':'Starting your '+(entry.kind==='game'?'game':'app')}</p><h1>{entry.title}</h1><p className="handoff-caption">{failed?(detail||'Windows could not bring your game forward. Retry, or check your launcher.'):phase==='resuming'?'Pick up where you left off.':waiting?'Your launcher may need you to sign in. Check it, or return home.':'Your game or launcher will open shortly.'}</p></div>
+  <div className="handoff-actions">{failed&&<button className="secondary-button" autoFocus onClick={()=>void action('handoffRetry')}>Retry</button>}<button className="secondary-button" autoFocus={!failed} onClick={()=>void action('handoffYield')}>Show game or launcher</button><button className="text-button" onClick={()=>void action('home')}><Home size={18}/>Return home</button></div>
  </main>;
 }
 export function GameOverlay({entry,artwork,resuming,notice,action}:{entry:Entry;artwork:ReactNode;resuming:boolean;notice:string;action:Action}){
